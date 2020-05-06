@@ -1,0 +1,513 @@
+---
+title: "Final Project - STAT 508"
+author: "Joseph Abraham, Pallavi Surana, Xue Zhang"
+date: "5/5/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(fpp2)
+library(expsmooth)
+library(fma)
+library(readr)
+library(MASS)
+library(splines)
+library(dplyr)
+library(coronavirus)
+```
+
+# Intro
+
+For this final project, we will be analyzing data from two different sources regarding the Coronavirus (COVID-19) pandemic, comprised of information from many countries and regions. The onset of this strain of the coronavirus is arguably the most internationally debilitating event since the Spanish Flu in 1918. 
+
+Now, in the midst of the ongoing situation, we will be analyzing data to validate commonly held notions about the disease and attempt to meaningfully model and segment its spread throughout the world using statistical techniques including logistic regression, non-linear regression, principal components analysis, and regression trees. 
+
+# Data
+
+The data used in this analysis is two sets of data regarding the spread of the coronavirus. One set, obtained from Kaggle, and the data, contains information on individuals in China, regarding their age, gender, survival status, and more. 
+
+These statistics from many different countries depicts the wild and proliferous spread of the coronavirus (covid-19) that has become a worldwide pandemic affecting nearly every country. 
+
+## Structure of Larger Dataset
+
+The data has many rows and 7 columns, with records through Feb 9th, 2020. It is updated on a regular basis.
+
+Each column has the following details:
+1. Province/State - Province or State
+2. Country/Region - Country or region
+3. Lat - latitude
+4. Long - longitude
+5. Date - Date when the observations were recorded
+6. cases - Cumulative number of cases reported 
+7. type - 3 types of cases, confirmed, recovered or death
+
+### Sources and References Used for Data
+
+* Source 1 - https://github.com/RamiKrispin/coronavirus
+* Reference 1 - https://covid19r.github.io/coronavirus/
+* Reference 2 - https://github.com/CSSEGISandData/COVID-19 
+* Source of kaggle dataset- https://www.kaggle.com/sudalairajkumar/novel-corona-virus-2019-dataset#covid_19_data.csv
+
+
+```{r}
+covid=read.csv("/Users/josephabraham/Documents/THE LAST SEMESTER/STAT 508/Final Project/novel-corona-virus-2019-dataset/COVID19_line_list_data.csv",header = TRUE)
+
+## Data on multiple individual cases, mostly from China.
+head(covid)
+## Regional coronavirus spread over days from different countries. 
+head(coronavirus)
+```
+
+# Analysis
+
+First, the effect of age and gender on death will be tested using a logistic regression model on the individual case data. 
+
+```{r}
+no_age=is.na(covid$age)
+covid_age=covid[-no_age,]
+death_var=rep(1,length(covid_age$id))
+death_var[covid_age$death=="0"]=0
+log.model=glm(death_var~gender*age,family=poisson(link="log"),data=covid_age)
+summary(log.model)
+```
+
+The interaction between gender and age was not significant at the $\alpha=0.05$ level and is therefore removed. 
+
+```{r}
+log.model=glm(death_var~gender+age,family=poisson(link="log"),data=covid_age)
+summary(log.model)
+```
+
+It appears that both gender and age are significant predictors of the likelihood of death, as men seem to be $exp(0.83885)=2.314$ times as likely to die, all other predictors held constant, and for each one year incrase in age, a person is $exp(0.06877)=1.07119$ times as likely to die. Below is a graphical representation of the model considering just the main effect on age. 
+
+```{r}
+age.model=glm(death_var~age,family=poisson(link="log"),data=covid_age)
+xage <- seq(0,100, 0.1)
+yage <- predict(age.model, list(age=xage),type="response")
+plot(covid_age$age,death_var, pch = 16, xlab = "Age",ylab="Death")
+lines(xage, yage, col= "blue", lwd = 2)
+```
+
+## USA State Rate of Change for every 3 days
+
+```{r}
+data <- read.csv("/Users/josephabraham/Documents/THE LAST SEMESTER/STAT 508/Final Project/novel-corona-virus-2019-dataset/covid_19_data.csv")
+data$ObservationDate <- as.Date(as.character(data$ObservationDate), format="%m/%d/%Y")
+str(data)
+#subset U.S.
+data.us <- subset(data, Country.Region=="US")
+data.us <- subset(data.us,Province.State %in% state.name)
+
+#################### create the function
+rate.confirmed <- function(data.ny){
+  #calculate increase per day
+  data.increase <- data.frame(cbind(data.frame(data.ny[2:nrow(data.ny),2]),apply( data.ny[,6:8], 2 , diff )))
+  colnames(data.increase) <- c("ObservationDate","Confirmed","Recovered","Deaths")
+  # replace below 0 with 0
+  data.increase[data.increase$Confirmed<0,4] <- 0
+  # take 3 days average
+  if(nrow(data.increase)%%3==0)
+    a<- data.increase
+  if(nrow(data.increase)%%3==1)
+    a<- data.increase[2:nrow(data.increase),]
+  if(nrow(data.increase)%%3==2)
+    a<- data.increase[3:nrow(data.increase),]
+  day3average <- colSums(matrix(a$Confirmed, nrow=3))
+  
+  a$day <- 1:nrow(a)
+  date <- a[a$day%%3==1,1]
+  
+  # standardization
+  confirmed <- cbind(date,data.frame(day3average/max(day3average)))
+  colnames(confirmed) <- c("date","rate")
+  return(confirmed)
+}
+
+# automatically fit and plot the curve
+curve <- function(confirmed,name){
+  #fit=smooth.spline(confirmed$rate~confirmed$date,cv=T)
+  fit=smooth.spline(confirmed$rate~confirmed$date,df=8)
+  days.grid=seq(from=1,to=nrow(confirmed))
+  pred <- predict(fit, newdata=list(days=days.grid),se=T)
+  a <-cor((nrow(confirmed)-10):nrow(confirmed),confirmed$rate[(nrow(confirmed)-10):nrow(confirmed)])
+  plot(y=confirmed$rate,x=confirmed$date,ylab="confirmed",xlab="date",main=paste(name))
+  lines(confirmed$date,pred$y,lwd=2,col="blue")
+  abline(v=(confirmed$date[nrow(confirmed)]-30),col="red", lwd=3, lty=2)
+}
+
+######function end#####################
+```
+
+
+
+```{r}
+# automatically subset
+states <- data.frame()
+par(mfrow=c(3,4))
+for(i in 1:length(state.name)){
+  data.i <- subset(data.us,Province.State == state.name[i])
+  confirmed<- rate.confirmed(data.i)
+  curve(confirmed,state.name[i])
+  states[i,1]<- state.name[i]
+  states[i,2] <- cor((nrow(confirmed)-10):nrow(confirmed),confirmed$rate[(nrow(confirmed)-10):nrow(confirmed)])
+  colnames(states) <- c("name","cor")
+}
+
+```
+
+```{r}
+states[order(states$cor),]
+```
+
+# plots
+
+```{r}
+par(mfrow=c(1,2))
+data.i <- subset(data.us,Province.State == "Montana")
+confirmed<- rate.confirmed(data.i)
+curve(confirmed,"Montana")
+
+data.i <- subset(data.us,Province.State == "New York")
+confirmed<- rate.confirmed(data.i)
+curve(confirmed,"New York")
+
+data.i <- subset(data.us,Province.State == "Virginia")
+confirmed<- rate.confirmed(data.i)
+curve(confirmed,"Virginia")
+
+data.i <- subset(data.us,Province.State == "Maryland")
+confirmed<- rate.confirmed(data.i)
+curve(confirmed,"Maryland")
+
+
+data.i <- subset(data.us,Province.State == "California")
+confirmed<- rate.confirmed(data.i)
+curve(confirmed,"California")
+
+data.i <- subset(data.us,Province.State == "Florida")
+confirmed<- rate.confirmed(data.i)
+curve(confirmed,"Florida")
+
+data.i <- subset(data.us,Province.State == "New Jersey")
+confirmed<- rate.confirmed(data.i)
+curve(confirmed,"New Jersey")
+
+data.i <- subset(data.us,Province.State == "New York")
+confirmed<- rate.confirmed(data.i)
+curve(confirmed,"New York")
+```
+
+The graphs above are from conducting a non-linear regression on the rate of increase in different states over the last 30 days and comparing the correlation of the standerized confirmed cases of recent 30 days. If the correlation is negative, is means the recent trend of confirmed case is declining; if it is high, it means there is a trend of increasing in the recent 30 days.
+
+It shows that Montana, Alaska, Vermont, Hawaii, and New York are having a trend of declining in new confirmed cases, as their correlation are all smaller than -0.8. 
+
+On the other hand, the top states that have an increasing new confirmed cases trend are: Virginia, Iowa, Mississippi, Illinois, Nebraska, Kansas, North Carolina, Maryland, Rhode Island, New Mexico and Minnesota, and they have correlation of more than 0.8.
+
+# PCA
+
+The result seem good in seperating some of the countries or areas, but we have to disgard the date variable for PCA.
+
+## Countries
+
+```{r,warning=FALSE}
+library(reshape2)
+# Country.Region
+a <- data[,c(2,4,6)]
+b <- dcast(a,ObservationDate~Country.Region,value.var = "Confirmed")
+b <- b[,2:221]
+b <- b[,colSums(b)>0]
+
+pr.out=prcomp(b)
+
+biplot(pr.out, scale=0)
+par(mfrow=c(1,2))
+pr.var=pr.out$sdev ^2
+pve=pr.var/sum(pr.var)
+plot(pve, xlab="Principal Component ", ylab="Proportion of Variance Explained ", ylim=c(0,1),type="b")
+plot(cumsum(pve), xlab="Principal Component ", ylab="Cumulative Proportion of Variance Explained ", ylim=c(0,1),
+     type="b")
+```
+
+The first two PCs explained more than 90% of the errors. It shows that the U.S. performs differently than the rest of the countries in the first PC. Canada, France and Netherland performs differently than the rest of the countries in the second PC.
+
+#### Deaths
+
+```{r,warning=FALSE}
+library(reshape2)
+# Country.Region
+a <- data[,c(2,4,7)]
+b <- dcast(a,ObservationDate~Country.Region,value.var = "Deaths")
+b <- b[,2:221]
+b <- b[,colSums(b)>0]
+
+pr.out=prcomp(b)
+
+biplot(pr.out, scale=0,main = "Deaths")
+par(mfrow=c(1,2))
+pr.var=pr.out$sdev ^2
+pve=pr.var/sum(pr.var)
+plot(pve, xlab="Principal Component ", ylab="Proportion of Variance Explained ", ylim=c(0,1),type="b")
+plot(cumsum(pve), xlab="Principal Component ", ylab="Cumulative Proportion of Variance Explained ", ylim=c(0,1),
+     type="b")
+```
+
+#### Recovered
+
+```{r,warning=FALSE}
+library(reshape2)
+# Country.Region
+a <- data[,c(2,4,8)]
+b <- dcast(a,ObservationDate~Country.Region,value.var = "Recovered")
+b <- b[,2:221]
+b <- b[,colSums(b)>0]
+
+pr.out=prcomp(b)
+
+biplot(pr.out, scale=0,main = "Recovered")
+par(mfrow=c(1,2))
+pr.var=pr.out$sdev ^2
+pve=pr.var/sum(pr.var)
+plot(pve, xlab="Principal Component ", ylab="Proportion of Variance Explained ", ylim=c(0,1),type="b")
+plot(cumsum(pve), xlab="Principal Component ", ylab="Cumulative Proportion of Variance Explained ", ylim=c(0,1),
+     type="b")
+```
+
+## U.S.
+
+```{r,warning=FALSE}
+a<- data[data$Country.Region=="US",c(2,3,6)]
+b <- dcast(a,ObservationDate~Province.State,value.var = "Confirmed")
+b <- b[,2:200]
+b[is.na(b)] <-0
+b <- b[,colSums(b)>0]
+
+pr.out=prcomp(b)
+
+biplot(pr.out, scale=0)
+pr.var=pr.out$sdev ^2
+par(mfrow=c(1,2))
+pve=pr.var/sum(pr.var)
+plot(pve, xlab="Principal Component ", ylab="Proportion of Variance Explained ", ylim=c(0,1),type="b")
+plot(cumsum(pve), xlab="Principal Component ", ylab="Cumulative Proportion of Variance Explained ", ylim=c(0,1),
+     type="b")
+```
+
+#### Deaths
+
+```{r,warning=FALSE}
+a<- data.us[data.us$Country.Region=="US",c(2,3,7)]
+b <- dcast(a,ObservationDate~Province.State,value.var = "Deaths")
+b[is.na(b)] <-0
+b <- b[,2:51]
+b <- b[,colSums(b)>0]
+
+pr.out=prcomp(b)
+
+biplot(pr.out, scale=0,main = "Deaths")
+pr.var=pr.out$sdev ^2
+par(mfrow=c(1,2))
+pve=pr.var/sum(pr.var)
+plot(pve, xlab="Principal Component ", ylab="Proportion of Variance Explained ", ylim=c(0,1),type="b")
+plot(cumsum(pve), xlab="Principal Component ", ylab="Cumulative Proportion of Variance Explained ", ylim=c(0,1),
+     type="b")
+
+
+```
+
+#### Recovered
+
+```{r,warning=FALSE}
+a<- data.us[data.us$Country.Region=="US",c(2,3,8)]
+b <- dcast(a,ObservationDate~Province.State,value.var = "Recovered")
+b[is.na(b)] <-0
+b <- b[,2:51]
+b <- b[,colSums(b)>0]
+
+pr.out=prcomp(b)
+
+biplot(pr.out, scale=0,main = "Recovered")
+pr.var=pr.out$sdev ^2
+par(mfrow=c(1,2))
+pve=pr.var/sum(pr.var)
+plot(pve, xlab="Principal Component ", ylab="Proportion of Variance Explained ", ylim=c(0,1),type="b")
+plot(cumsum(pve), xlab="Principal Component ", ylab="Cumulative Proportion of Variance Explained ", ylim=c(0,1),
+     type="b")
+
+```
+
+This results shows that the first PC explains most of the errors, and New York performs different comparing with the rest of the states.
+
+Now, to assess the variables that affect recovery, we will attempt to classify the data using classification trees. 
+
+## Decision Trees
+
+To estimate recovery trend, create "recover" column. Now if recovery is reported the corresponding row in the column gets a value of 1 otherwise 0. 
+
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+recover <- c(1:1507)
+coronavirus=cbind(coronavirus, recover)
+```
+
+For simplicity, we are recording the response here as binary. We can see we have 493 recovered cases recorded.
+
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+coronavirus$recover [coronavirus$type == "recovered"] <- 1
+coronavirus$recover [coronavirus$type != "recovered"] <- 0
+
+table(coronavirus$recover)
+# coronavirus
+```
+
+#### Split data for plotting decision trees
+
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+# train and test data
+library(caret)
+set.seed(1)
+trainIndex = createDataPartition(coronavirus$recover, p = .80, 
+                                  list = FALSE)
+train.data = coronavirus[ trainIndex, ]
+test.data = coronavirus [ -trainIndex, ]
+```
+
+We have split the data into train and test with 80:20 ratio. The test data has 301 observations and train has 1206 observations.
+All data points of recover are converted to factors from int to compute decision trees.
+
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+dim (train.data)
+dim(test.data)
+train.data$recover = factor(train.data$recover)
+test.data$recover = factor(test.data$recover)
+```
+
+### Decision tree model (Classification Tree)
+
+```{r include=FALSE, eval=TRUE, echo=FALSE}
+library(tidyverse)
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(fpp2)
+library(expsmooth)
+library(fma)
+library(readr)
+```
+
+## 1st model - Classification tree
+
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+# build decision tree model
+rpart = rpart(recover ~ cases + Country.Region,
+    data = train.data,
+    method="class", # classification tree
+    parms=list(split="information"),
+    control=rpart.control(cp = 0.001))
+
+# Generate a textual view of the Decision Tree model.
+print(rpart)
+```
+
+When rpart grows a tree it performs 10-fold cross validation on the data. Use printcp() to see the cross validation results. When we see the variable imporatnce from the tree computed, it makes sense that the recovery is more dependent on the number of cases and not region wise as the importance is more for number of cases.
+  
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+printcp(rpart)
+
+# visualize cross-validation results
+plotcp(rpart) 
+
+rpart$variable.importance
+
+```
+
+Th decision tree plots teels us in countries like Egypt, Canada, US, UK, Germany among others split into 2 branches when the cases are more than or = 12. When the cases are greater than 12,  and split into a subtree where it is greater than 1331 cases there is no recovery seen and in such cases the recovery is expected around 300 cases overall. Similarly in countries like India and Japan among others, for instance in UAE, recovery is reported when cases are less than 10. 
+
+```{r include=TRUE, eval=TRUE, echo=FALSE}
+# Decision Tree Plot
+prp(rpart)
+```
+
+This is another way of depicting the above tree.
+
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+dev.new()
+fancyRpartPlot(rpart, main="Decision Tree Graph")
+```
+
+Pruning tree for better model performance and to check if it matches the classification tree we got earlier. The minimum calculated is in sync with the first reading of the cross-validation results. This is calculated based on the cp table which has the least xerror and xstd values and is chosen for pruning. In this case the cp values used for pruning will be  
+
+* CP nsplit rel error xerror     xstd
+  0.0019582      0   1.00000 1.0000 0.042211
+  
+It’s usually a good idea to prune a decision tree. Fully grown trees don’t perform well against data not in the training set because they tend to be over-fitted so pruning is used to reduce their complexity by keeping only the most important splits.
+
+Pruning shows that when cases are less than about 300 recovery chances are higher in comparison to otherwise in the counties shown in the tree.
+
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+
+# Pruning tree
+rpart.prune = prune(rpart, cp = 0.0019582)
+
+prp(rpart.prune)
+```
+
+Make predictions and calculate accuracy from confusion matrix.
+Accuracy = number correct divided by number total instances
+Accuracy = 67.77%
+
+```{r include=TRUE, eval=TRUE, echo=TRUE}
+rpart1 = rpart(recover ~ cases + Country.Region,
+              data = test.data,
+              method="class", # classification tree
+              parms=list(split="information"),
+              control=rpart.control(cp = 0.001))
+rpart.prune1 = prune(rpart1, cp = 0.0019582)
+pred.rpart1 = factor(predict(rpart.prune1, type = "class", data = test.data))
+
+# making the confusion matrix for test #
+confusionMatrix(test.data$recover, pred.rpart1)
+```
+
+# Conclusion
+
+This project is timely and important in the way that the pandemic has taken over the world and we are all living in it. This study concludes the following:
+
+#### Logistic Regression
+
+The effect of age and gender on death was tested using a logistic regression model on the individual case data.
+
+We observe that both gender and age are significant predictors of death due to coronavirus. Men seem 2.314 more likely to die from infection and for every one-year increase in age a person is about 1.07 times more likely.
+
+#### Non-Linear Regression
+
+We did the non-linear regression to the data, and it turns out not all the states have the same trend. some of them had peaks and the curve is falling down, while others are still climbing up.
+
+We are more concerned about the states most recent performance and compared the correlation of the standardized confirmed cases of recent 30 days- which is at the right of the red vertical dotted line. If the correlation is negative, it means the recent trend of confirmed case is declining; if it is positive, it means there is a trend of increasing in the recent 30 days.
+
+It shows that Montana, Alaska, Vermont, Hawaii, and New York are having a trend of declining in new confirmed cases, as their correlation are all smaller than -0.8. For example, among them Montana has the smallest correlation which is -0.96, and that of New York is -0.81. Those states all shows that they have passed the peak of the curve and now the new confirmed cases are falling down.
+
+On the other hand, the states that have fastest increasing new confirmed cases trend are: Virginia, Iowa, Mississippi, Illinois, Nebraska, Kansas, North Carolina, Maryland, Rhode Island, New Mexico and Minnesota, and they have correlation of more than 0.8. For example, the largest correlation is from Virginia which is 0.97, and we could see from the non-linear curve as well that the new confirmed cases are increasing sharply recently. The increase of confirmed cases might due to the increase of the test ability recently or other reasons, and the data is telling us that the situations in those states need some attention because of their recent increase of new confirmed cases.
+
+
+#### Principal Component Analysis on the coronavirus package
+
+The result seem good in separating some of the countries or areas, but we have to disregard the date variable for PCA.
+
+For the PCA of world wide by countries. It shows similar trends in confirmed number of cases, deaths and recovered. The U.S. performs differently than the rest of the countries in the first PC. Canada, France and Netherlands performs differently than the rest of the countries in the second PC.
+
+For the PCA of the U.S., it shows in the confirmed case numbers and deaths numbers, the first PC explains most of the errors, and New York performs different comparing with the rest of the states. In the recovered data, Maryland performs different, following by New Jersy and Kansas.
+
+
+#### Decision trees
+
+We try to predict if the recovery cases trend in terms of greater than the other, is based on number of cases in country or the region of infection.
+
+The decision tree plots shows us in countries like Egypt, Canada, US, UK, Germany among others split into 2 branches when the cases are more than or = 12. When the cases are greater than 12, and split into a subtree where it is greater than 1331 cases there is no recovery seen and in such cases the recovery is expected around 300 cases overall. Similarly in countries like India and Japan among others, for instance in UAE, recovery is reported when cases are less than 10. 
+
+Confusion matrix and statistics related to the tree performance show us that the accuracy of the classification tree plotted is about 67.7% and Cohen's kappa value of 0.246, with a sensitivity of 73.39%. Overall the classification tree is a good metric to predict recovery cases and the lower the number of cases in a country, better the possibility of patients recovery.
+
+
